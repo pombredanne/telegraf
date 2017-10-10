@@ -34,7 +34,7 @@ export GOPATH=$BUILD_DIR
 # Turning off GOGC speeds up build times
 export GOGC=off
 export PATH=$GOPATH/bin:$PATH
-exit_if_fail mkdir -p $GOPATH/src/github.com/influxdb
+exit_if_fail mkdir -p $GOPATH/src/github.com/influxdata
 
 # Dump some test config to the log.
 echo "Test configuration"
@@ -44,8 +44,8 @@ echo "\$GOPATH: $GOPATH"
 echo "\$CIRCLE_BRANCH: $CIRCLE_BRANCH"
 
 # Move the checked-out source to a better location
-exit_if_fail mv $HOME/telegraf $GOPATH/src/github.com/influxdb
-exit_if_fail cd $GOPATH/src/github.com/influxdb/telegraf
+exit_if_fail mv $HOME/telegraf $GOPATH/src/github.com/influxdata
+exit_if_fail cd $GOPATH/src/github.com/influxdata/telegraf
 
 # Verify that go fmt has been run
 check_go_fmt
@@ -54,18 +54,42 @@ check_go_fmt
 exit_if_fail make
 
 # Run the tests
-exit_if_fail godep go vet ./...
+exit_if_fail go vet ./...
 exit_if_fail make docker-run-circle
-sleep 10
-exit_if_fail godep go test -race ./...
+# Sleep for OpenTSDB leadership election, aerospike cluster, etc.
+exit_if_fail sleep 60
+exit_if_fail go test -race ./...
 
 # Simple Integration Tests
-#   check that version was properly set
-exit_if_fail "./telegraf -version | grep $VERSION"
 #   check that one test cpu & mem output work
 tmpdir=$(mktemp -d)
 ./telegraf -sample-config > $tmpdir/config.toml
 exit_if_fail ./telegraf -config $tmpdir/config.toml \
-    -test -filter cpu:mem
+    -test -input-filter cpu:mem
 
-exit $rc
+gzip telegraf -c > "$CIRCLE_ARTIFACTS/telegraf.gz"
+
+if git describe --exact-match HEAD 2>&1 >/dev/null; then
+    # install fpm (packaging dependency)
+    exit_if_fail gem install fpm
+    # install boto & rpm (packaging & AWS dependencies)
+    exit_if_fail sudo apt-get install -y rpm python-boto
+    unset GOGC
+    tag=$(git describe --exact-match HEAD)
+    echo $tag
+    exit_if_fail ./scripts/build.py --release --package --platform=all --arch=all --upload --bucket=dl.influxdata.com/telegraf/releases
+    mv build $CIRCLE_ARTIFACTS
+elif [ -n "${PACKAGE}" ]; then
+    # install fpm (packaging dependency)
+    exit_if_fail gem install fpm
+    # install boto & rpm (packaging & AWS dependencies)
+    exit_if_fail sudo apt-get install -y rpm python-boto
+    unset GOGC
+    if [ "$(git rev-parse --abbrev-ref HEAD)" = master ]
+    then
+        exit_if_fail ./scripts/build.py --nightly --package --platform=all --arch=all --upload --bucket=dl.influxdata.com/telegraf/nightlies
+    else
+        exit_if_fail ./scripts/build.py --package --platform=all --arch=all
+    fi
+    mv build $CIRCLE_ARTIFACTS
+fi

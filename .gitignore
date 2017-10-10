@@ -1,3 +1,7 @@
+build
 tivan
 .vagrant
-telegraf
+/telegraf
+.idea
+*~
+*#
